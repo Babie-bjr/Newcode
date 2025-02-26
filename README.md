@@ -1,89 +1,68 @@
-import cv2
-import numpy as np
-import os
+from sklearn.model_selection import train_test_split, cross_val_score
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.metrics import accuracy_score, confusion_matrix, ConfusionMatrixDisplay, classification_report
+from sklearn.preprocessing import StandardScaler
 import pandas as pd
+import numpy as np
+import matplotlib
 import matplotlib.pyplot as plt
 
-# ฟังก์ชันแปลงพิกเซลเป็นเซนติเมตร
-def pixel_to_cm(pixels, dpi=300):
-    inches = pixels / dpi
-    return inches * 2.54  # แปลงนิ้วเป็นเซนติเมตร
+# ใช้โหมด headless ถ้าไม่มี GUI
+matplotlib.use('Agg')
 
-# ฟังก์ชันกำหนดรหัสขนาดตามเส้นผ่าศูนย์กลาง
-def get_size_class(diameter):
-    if diameter > 6.2:
-        return 1
-    elif 5.9 <= diameter <= 6.2:
-        return 2
-    elif 5.3 <= diameter <= 5.8:
-        return 3
-    elif 4.6 <= diameter <= 5.2:
-        return 4
-    elif 3.8 <= diameter <= 4.5:
-        return 5
-    else:
-        return 0  # เส้นผ่าศูนย์กลางไม่อยู่ในช่วงที่กำหนด
+# ตั้งค่าพาธไฟล์ CSV บน Raspberry Pi
+file_path = "/home/pi/dataset/shuffled_sampled_colors.csv"
 
-# กำหนดโฟลเดอร์ที่เก็บภาพ
-folder_path = "images/"  # เปลี่ยนเป็นชื่อโฟลเดอร์ที่ใช้จริง
-output_csv = "mangosteen_data.csv"
+# โหลดข้อมูลจากไฟล์ CSV
+data = pd.read_csv(file_path)
 
-# สร้าง DataFrame เก็บผลลัพธ์
-data_list = []
+# แปลงค่าหมวดหมู่เป็นตัวเลข
+data['R'] = pd.to_numeric(data['R'], errors='coerce').fillna(0)
+data['G'] = pd.to_numeric(data['G'], errors='coerce').fillna(0)
+data['B'] = pd.to_numeric(data['B'], errors='coerce').fillna(0)
+data['Class'] = data['Class'].replace({'Red': 10, 'Black': 20, 'Green': 30})
 
-# วนลูปอ่านทุกไฟล์ภาพในโฟลเดอร์
-for filename in os.listdir(folder_path):
-    if filename.lower().endswith(('.png', '.jpg', '.jpeg')):  # ตรวจสอบว่าเป็นไฟล์ภาพ
-        file_path = os.path.join(folder_path, filename)
-        original_image = cv2.imread(file_path)
+# แบ่งข้อมูลเป็น Train (80%), Test (10%), Validation (10%)
+x = data[['R', 'G', 'B']]
+y = data['Class']
+train_x, temp_x, train_y, temp_y = train_test_split(x, y, train_size=0.8, random_state=30, stratify=y)
+test_x, validation_x, test_y, validation_y = train_test_split(temp_x, temp_y, test_size=0.5, random_state=30, stratify=temp_y)
 
-        # ตรวจสอบว่าโหลดภาพสำเร็จหรือไม่
-        if original_image is None:
-            print(f"Error: Could not load {filename}")
-            continue
+# Standardize ข้อมูล
+scaler = StandardScaler()
+train_x_scaled = scaler.fit_transform(train_x)
+test_x_scaled = scaler.transform(test_x)
+validation_x_scaled = scaler.transform(validation_x)
 
-        # แปลงเป็น Grayscale และทำ Threshold
-        gray_image = cv2.cvtColor(original_image, cv2.COLOR_BGR2GRAY)
-        _, binary_image = cv2.threshold(gray_image, 128, 255, cv2.THRESH_BINARY_INV)
+# ตั้งค่า K
+k = 3
 
-        # ทำความสะอาด Noise
-        kernel = np.ones((5, 5), np.uint8)
-        binary_image_cleaned = cv2.morphologyEx(binary_image, cv2.MORPH_CLOSE, kernel)
+# Train โมเดล
+knn = KNeighborsClassifier(n_neighbors=k, weights='distance', metric='euclidean')
+knn.fit(train_x_scaled, train_y)
 
-        # หา Contours
-        contours, _ = cv2.findContours(binary_image_cleaned, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+# ทดสอบโมเดลบน Test Set
+y_pred_test = knn.predict(test_x_scaled)
+test_accuracy = accuracy_score(test_y, y_pred_test)
+print(f'Accuracy on Test Data: {test_accuracy * 100:.2f}%')
 
-        if contours:
-            # หา contour ที่มีพื้นที่มากที่สุด
-            largest_contour = max(contours, key=cv2.contourArea)
+# แสดงผล Confusion Matrix (บันทึกเป็นไฟล์แทนการแสดง GUI)
+cm = confusion_matrix(test_y, y_pred_test)
+disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=['Red', 'Black', 'Green'])
+disp.plot(cmap=plt.cm.Blues)
+plt.title(f'Confusion Matrix on Test Data\nAccuracy: {test_accuracy * 100:.2f}%')
+plt.savefig("/home/pi/results/confusion_matrix.png")  # บันทึกไฟล์รูปแทนการแสดงผล
+plt.close()
 
-            # ใช้ bounding box หาเส้นผ่านศูนย์กลาง
-            x, y, w, h = cv2.boundingRect(largest_contour)
+# ทำนายจากข้อมูลที่คำนวณขนาดจากภาพแล้ว
+def predict_color(r, g, b):
+    sample = np.array([[r, g, b]])  # ใส่ค่า RGB ที่ได้จากการคำนวณ
+    sample_scaled = scaler.transform(sample)
+    prediction = knn.predict(sample_scaled)
+    class_map = {10: "Red", 20: "Black", 30: "Green"}
+    return class_map.get(prediction[0], "Unknown")
 
-            # แปลงพิกเซลเป็นเซนติเมตร
-            diameter_cm = pixel_to_cm(w)
-
-            # หารหัสขนาด
-            size_class = get_size_class(diameter_cm)
-
-            # ครอปภาพบริเวณผลไม้
-            padding = 20
-            x1, y1 = max(x - padding, 0), max(y - padding, 0)
-            x2, y2 = min(x + w + padding, original_image.shape[1]), min(y + h + padding, original_image.shape[0])
-            cropped_image = original_image[y1:y2, x1:x2]
-
-            # คำนวณค่าเฉลี่ย RGB บริเวณผลไม้
-            avg_color_per_row = np.mean(cropped_image, axis=0)
-            avg_color = np.mean(avg_color_per_row, axis=0)  # ค่าเฉลี่ย (B, G, R)
-            avg_r, avg_g, avg_b = avg_color[2], avg_color[1], avg_color[0]  # แปลงเป็น (R, G, B)
-
-            # เก็บข้อมูลใน List
-            data_list.append([filename, avg_r, avg_g, avg_b, diameter_cm, size_class])
-
-            print(f"Processed: {filename} - Size Class {size_class}, Diameter {diameter_cm:.2f} cm")
-
-# แปลงข้อมูลเป็น DataFrame และบันทึก CSV
-df = pd.DataFrame(data_list, columns=["Filename", "R", "G", "B", "Diameter (cm)", "Size Class"])
-df.to_csv(output_csv, index=False)
-
-print(f"\n Data saved to {output_csv}")
+# ตัวอย่างการใช้ฟังก์ชันทำนาย
+r, g, b = 120, 50, 200  # แทนค่าที่ได้จากภาพ
+predicted_class = predict_color(r, g, b)
+print(f'Predicted Class for (R={r}, G={g}, B={b}): {predicted_class}')
