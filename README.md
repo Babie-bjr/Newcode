@@ -9,7 +9,7 @@ def pixel_to_cm(pixels, dpi=300):
     return inches * 2.54  # แปลงนิ้วเป็นเซนติเมตร
 
 # ฟังก์ชันตรวจจับสีหลัก (Red, Green, Black)
-def detect_color(r, g, b):
+def detect_class(r, g, b):
     if r > 100 and g < 80 and b < 80:
         return "Red"
     elif g > 100 and r < 80 and b < 80:
@@ -69,16 +69,16 @@ for filename in os.listdir(folder_path):
             avg_color = np.mean(avg_color_per_row, axis=0)  # ค่าเฉลี่ย (B, G, R)
             avg_r, avg_g, avg_b = avg_color[2], avg_color[1], avg_color[0]  # แปลงเป็น (R, G, B)
 
-            # ตรวจจับสีหลัก
-            color_detected = detect_color(avg_r, avg_g, avg_b)
+            # ตรวจจับคลาสของผลไม้ (Red, Green, Black)
+            fruit_class = detect_class(avg_r, avg_g, avg_b)
 
             # เก็บข้อมูลใน List
-            data_list.append([filename, avg_r, avg_g, avg_b, diameter_cm, color_detected])
+            data_list.append([filename, avg_r, avg_g, avg_b, diameter_cm, fruit_class])
 
-            print(f"Processed: {filename} - Diameter {diameter_cm:.2f} cm, Color: {color_detected}")
+            print(f"Processed: {filename} - Diameter {diameter_cm:.2f} cm, Class: {fruit_class}")
 
 # แปลงข้อมูลเป็น DataFrame และบันทึก CSV
-df = pd.DataFrame(data_list, columns=["Filename", "R", "G", "B", "Diameter (cm)", "Color"])
+df = pd.DataFrame(data_list, columns=["Filename", "R", "G", "B", "Diameter (cm)", "Class"])
 df.to_csv(output_csv, index=False)
 
 print(f"\n✅ Data saved to {output_csv}")
