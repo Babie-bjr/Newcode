@@ -3,6 +3,11 @@ import cv2
 import numpy as np
 import matplotlib.pyplot as plt
 import os
+from sklearn.model_selection import train_test_split, cross_val_score
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.metrics import accuracy_score, confusion_matrix, ConfusionMatrixDisplay, classification_report
+from sklearn.preprocessing import StandardScaler
+import pandas as pd
 
 # Function to convert pixels to cm (Adjust DPI based on Raspberry Pi camera)
 def pixel_to_cm(pixels, dpi=300):  # Adjust DPI according to your camera
@@ -108,11 +113,72 @@ avg_color = np.mean(colors, axis=0).astype(int)
 print(f"Average RGB: {tuple(avg_color)}")
 print(f"Diameter X: {diameter_cm:.2f} cm")
 
-# Show images using Matplotlib
-plt.figure(figsize=(16, 12))
-plt.subplot(2, 2, 1), plt.imshow(cv2.cvtColor(original_image, cv2.COLOR_BGR2RGB)), plt.title("Original Image"), plt.axis("off")
-plt.subplot(2, 2, 2), plt.imshow(binary_image_cleaned_no_text), plt.title("Binary & Cleaned"), plt.axis("off")
-plt.subplot(2, 2, 3), plt.imshow(cv2.cvtColor(binary_image_cleaned, cv2.COLOR_BGR2RGB)), plt.title("Diameter X (Cleaned Image)"), plt.axis("off")
-plt.subplot(2, 2, 4), plt.imshow(cv2.cvtColor(image_with_box, cv2.COLOR_BGR2RGB)), plt.title("RGB Measurement Area"), plt.axis("off")
-plt.tight_layout()
-plt.show()
+# ---------------------- Machine Learning Part -----------------------
+
+# เปลี่ยนพาธของไฟล์ให้ถูกต้อง
+file_path = "/home/pi/Documents/sampled_colors_300.csv"  # แก้ไขพาธให้ตรงกับที่เก็บไฟล์ในเครื่อง Raspberry Pi
+
+# โหลดข้อมูลจากไฟล์เดียว
+data = pd.read_csv(file_path)
+
+# แปลงค่าหมวดหมู่เป็นตัวเลข
+data['R'] = pd.to_numeric(data['R'], errors='coerce').fillna(0)
+data['G'] = pd.to_numeric(data['G'], errors='coerce').fillna(0)
+data['B'] = pd.to_numeric(data['B'], errors='coerce').fillna(0)
+data['Class'] = data['Class'].replace({'Red': 10, 'Black': 20, 'Green': 30})
+
+# แบ่งข้อมูลเป็น Train (80%), Test (10%), Validation (10%) โดยใช้ stratify เพื่อรักษาสัดส่วนของคลาส
+x = data[['R', 'G', 'B']]
+y = data['Class']
+
+# แบ่งข้อมูลเป็น Train 80% และ Test + Validation 20% แล้วแบ่ง Test และ Validation อย่างละ 50%
+train_x, temp_x, train_y, temp_y = train_test_split(x, y, train_size=0.8, random_state=30, stratify=y)
+test_x, validation_x, test_y, validation_y = train_test_split(temp_x, temp_y, test_size=0.5, random_state=30, stratify=temp_y)
+
+# ตรวจสอบขนาดของชุดข้อมูล
+print(f'Training Data: {len(train_x)} samples')
+print(f'Test Data: {len(test_x)} samples')
+print(f'Validation Data: {len(validation_x)} samples')
+
+# Standardize ข้อมูล
+scaler = StandardScaler()
+train_x_scaled = scaler.fit_transform(train_x)
+test_x_scaled = scaler.transform(test_x)
+validation_x_scaled = scaler.transform(validation_x)
+
+# ตั้งค่า K เป็น 5
+k = 5
+
+# Train โมเดลด้วย K ที่เลือก
+knn = KNeighborsClassifier(n_neighbors=k, weights='distance', metric='euclidean')
+knn.fit(train_x_scaled, train_y)
+
+# ทำ Cross Validation (ใช้ 5-fold)
+cv_scores = cross_val_score(knn, train_x_scaled, train_y, cv=5, scoring='accuracy')
+
+# แสดงผลลัพธ์ของ Cross Validation
+print(f'Cross Validation Scores: {cv_scores}')
+print(f'Mean Accuracy from Cross Validation: {cv_scores.mean() * 100:.2f}%')
+
+# ทดสอบโมเดลบน Test Set
+y_pred_test = knn.predict(test_x_scaled)
+test_accuracy = accuracy_score(test_y, y_pred_test)
+print(f'Accuracy on Test Data: {test_accuracy * 100:.2f}%')
+
+# แสดงรายละเอียดของ Recall, Precision, F1-Score สำหรับ Test Set
+print("\nClassification Report on Test Data:")
+print(classification_report(test_y, y_pred_test, target_names=['Red', 'Black', 'Green']))
+
+# ทดสอบโมเดลบน Validation Set
+y_pred_validation = knn.predict(validation_x_scaled)
+validation_accuracy = accuracy_score(validation_y, y_pred_validation)
+print(f'Accuracy on Validation Data: {validation_accuracy * 100:.2f}%')
+
+# แสดงรายละเอียดของ Recall, Precision, F1-Score สำหรับ Validation Set
+print("\nClassification Report on Validation Data:")
+print(classification_report(validation_y, y_pred_validation, target_names=['Red', 'Black', 'Green']))
+
+# แสดง Confusion Matrix สำหรับ Validation Data
+cm = confusion_matrix(validation_y, y_pred_validation)
+
+# คำนวณ Accuracy จาก Conf
