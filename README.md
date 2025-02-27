@@ -34,63 +34,79 @@ def get_color_class(rgb):
         return 30  # Black
     return 0  # ไม่เข้ากลุ่ม
 
-# โหลดภาพ
-image_path = "mangosteen.jpg"  # เปลี่ยนเป็นชื่อไฟล์ของคุณ
-original_image = cv2.imread(image_path)
-
-if original_image is None:
-    print(f"Error: ไม่พบไฟล์ {image_path}")
-    exit()
-
-# แปลงเป็น Grayscale และทำ Threshold
-gray_image = cv2.cvtColor(original_image, cv2.COLOR_BGR2GRAY)
-_, binary_image = cv2.threshold(gray_image, 128, 255, cv2.THRESH_BINARY_INV)
-
-# ทำความสะอาด Noise
-kernel = np.ones((5, 5), np.uint8)
-binary_image_cleaned = cv2.morphologyEx(binary_image, cv2.MORPH_CLOSE, kernel)
-
-# หา Contours
-contours, _ = cv2.findContours(binary_image_cleaned, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
-# สร้างโฟลเดอร์สำหรับเก็บผลลัพธ์
+# กำหนดโฟลเดอร์ภาพ
+image_folder = "mangosteen_dataset"  # เปลี่ยนเป็นโฟลเดอร์ที่มี 360 รูป
 output_dir = "output_data"
 os.makedirs(output_dir, exist_ok=True)
 
-# ตรวจสอบว่าพบผลไม้หรือไม่
-if contours:
-    # หา contour ที่ใหญ่ที่สุด
-    largest_contour = max(contours, key=cv2.contourArea)
-    x, y, w, h = cv2.boundingRect(largest_contour)
+# ไฟล์ CSV สำหรับบันทึกข้อมูล
+size_file = os.path.join(output_dir, "size_data.csv")
+color_file = os.path.join(output_dir, "color_data.csv")
 
-    # คำนวณเส้นผ่านศูนย์กลาง (เป็น cm)
-    diameter_cm = pixel_to_cm(w)
-    size_class = get_size_class(diameter_cm)
+# เปิดไฟล์ CSV เพื่อบันทึกข้อมูล
+with open(size_file, mode="w", newline="") as size_csv, open(color_file, mode="w", newline="") as color_csv:
+    size_writer = csv.writer(size_csv)
+    color_writer = csv.writer(color_csv)
 
-    # ครอปบริเวณผลไม้
-    padding = 20
-    x1, y1 = max(x - padding, 0), max(y - padding, 0)
-    x2, y2 = min(x + w + padding, original_image.shape[1]), min(y + h + padding, original_image.shape[0])
-    cropped_image = original_image[y1:y2, x1:x2]
+    # เขียนหัวข้อของไฟล์ CSV
+    size_writer.writerow(["Image", "Diameter (cm)", "Size Class"])
+    color_writer.writerow(["Image", "R", "G", "B", "คลาส"])
 
-    # คำนวณค่าเฉลี่ย RGB
-    avg_color = np.mean(cropped_image, axis=(0, 1)).astype(int)  # ค่า RGB
-    color_class = get_color_class(avg_color)
+    # อ่านไฟล์ภาพทั้งหมดในโฟลเดอร์
+    image_files = [f for f in os.listdir(image_folder) if f.endswith((".jpg", ".png", ".jpeg"))]
 
-    # บันทึกข้อมูลขนาดลง CSV
-    size_file = os.path.join(output_dir, "size_data.csv")
-    with open(size_file, mode="w", newline="") as file:
-        writer = csv.writer(file)
-        writer.writerow(["Diameter (cm)", "Size Class"])
-        writer.writerow([f"{diameter_cm:.2f}", size_class])
+    # เช็คว่ามีภาพหรือไม่
+    if not image_files:
+        print("Error: ไม่พบไฟล์ภาพในโฟลเดอร์")
+        exit()
 
-    # บันทึกข้อมูลสีลง CSV (เปลี่ยนหัวข้อเป็น "คลาส" แทน "Color Class")
-    color_file = os.path.join(output_dir, "color_data.csv")
-    with open(color_file, mode="w", newline="") as file:
-        writer = csv.writer(file)
-        writer.writerow(["R", "G", "B", "คลาส"])
-        writer.writerow([avg_color[2], avg_color[1], avg_color[0], color_class])  # OpenCV ใช้ BGR
-    
-    print(f"บันทึกข้อมูลเสร็จสิ้น: {size_file} และ {color_file}")
-else:
-    print("ไม่พบผลไม้ในภาพ")
+    # วนลูปรันทุกภาพ
+    for image_file in image_files:
+        image_path = os.path.join(image_folder, image_file)
+        original_image = cv2.imread(image_path)
+
+        # ตรวจสอบว่าโหลดภาพสำเร็จหรือไม่
+        if original_image is None:
+            print(f"Error: ไม่สามารถโหลดภาพ {image_path}")
+            continue  # ข้ามภาพนี้แล้วทำภาพถัดไป
+
+        # แปลงเป็น Grayscale และทำ Threshold
+        gray_image = cv2.cvtColor(original_image, cv2.COLOR_BGR2GRAY)
+        _, binary_image = cv2.threshold(gray_image, 128, 255, cv2.THRESH_BINARY_INV)
+
+        # ทำความสะอาด Noise
+        kernel = np.ones((5, 5), np.uint8)
+        binary_image_cleaned = cv2.morphologyEx(binary_image, cv2.MORPH_CLOSE, kernel)
+
+        # หา Contours
+        contours, _ = cv2.findContours(binary_image_cleaned, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+        if contours:
+            # หา contour ที่ใหญ่ที่สุด
+            largest_contour = max(contours, key=cv2.contourArea)
+            x, y, w, h = cv2.boundingRect(largest_contour)
+
+            # คำนวณเส้นผ่านศูนย์กลาง (เป็น cm)
+            diameter_cm = pixel_to_cm(w)
+            size_class = get_size_class(diameter_cm)
+
+            # ครอปบริเวณผลไม้
+            padding = 20
+            x1, y1 = max(x - padding, 0), max(y - padding, 0)
+            x2, y2 = min(x + w + padding, original_image.shape[1]), min(y + h + padding, original_image.shape[0])
+            cropped_image = original_image[y1:y2, x1:x2]
+
+            # คำนวณค่าเฉลี่ย RGB
+            avg_color = np.mean(cropped_image, axis=(0, 1)).astype(int)  # ค่า RGB
+            color_class = get_color_class(avg_color)
+
+            # บันทึกข้อมูลขนาดลง CSV
+            size_writer.writerow([image_file, f"{diameter_cm:.2f}", size_class])
+
+            # บันทึกข้อมูลสีลง CSV
+            color_writer.writerow([image_file, avg_color[2], avg_color[1], avg_color[0], color_class])  # OpenCV ใช้ BGR
+
+            print(f"✅ {image_file}: เส้นผ่านศูนย์กลาง ≈ {diameter_cm:.2f} cm, รหัสขนาด {size_class}, สี {avg_color} (คลาส {color_class})")
+
+print(f"✅ ประมวลผลภาพทั้งหมด ({len(image_files)} ภาพ) เสร็จสิ้น!")
+print(f"📂 ข้อมูลบันทึกลงใน: {size_file} และ {color_file}")
