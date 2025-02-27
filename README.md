@@ -26,36 +26,33 @@ def get_size_class(diameter):
 # ฟังก์ชันกำหนดคลาสสี (Red = 10, Green = 20, Black = 30)
 def get_color_class(rgb):
     r, g, b = rgb
-    if r > g and r > b:
-        return 10  # Red
-    elif g > r and g > b:
-        return 20  # Green
-    elif r < 50 and g < 50 and b < 50:
-        return 30  # Black
-    return 0  # ไม่เข้ากลุ่ม
 
-# กำหนดโฟลเดอร์ภาพ
-image_folder = "mangosteen_dataset"  # เปลี่ยนเป็นโฟลเดอร์ที่มี 360 รูป
-output_dir = "output_data"
-os.makedirs(output_dir, exist_ok=True)
+    # ค่ามาตรฐานของแต่ละคลาส
+    colors = {
+        10: (255, 0, 0),   # Red
+        20: (0, 255, 0),   # Green
+        30: (0, 0, 0)      # Black
+    }
 
-# ไฟล์ CSV สำหรับบันทึกข้อมูล
-size_file = os.path.join(output_dir, "size_data.csv")
-color_file = os.path.join(output_dir, "color_data.csv")
+    # คำนวณว่าใกล้สีไหนมากที่สุด (ใช้ Euclidean Distance)
+    closest_class = min(colors, key=lambda c: np.linalg.norm(np.array(rgb) - np.array(colors[c])))
 
-# เปิดไฟล์ CSV เพื่อบันทึกข้อมูล
-with open(size_file, mode="w", newline="") as size_csv, open(color_file, mode="w", newline="") as color_csv:
-    size_writer = csv.writer(size_csv)
-    color_writer = csv.writer(color_csv)
+    return closest_class  # คืนค่าคลาสที่ใกล้ที่สุด (10, 20, 30 เท่านั้น)
 
-    # เขียนหัวข้อของไฟล์ CSV
-    size_writer.writerow(["Image", "Diameter (cm)", "Size Class"])
-    color_writer.writerow(["Image", "R", "G", "B", "คลาส"])
+# กำหนดโฟลเดอร์ที่เก็บรูป 360 รูป
+image_folder = "mangosteen_dataset"  # เปลี่ยนเป็นโฟลเดอร์ของคุณ
+output_csv = "output_data/mangosteen_results.csv"
+os.makedirs("output_data", exist_ok=True)  # สร้างโฟลเดอร์ถ้ายังไม่มี
+
+# เปิดไฟล์ CSV เพื่อบันทึกผลลัพธ์ทั้งหมด
+with open(output_csv, mode="w", newline="") as file:
+    writer = csv.writer(file)
+    writer.writerow(["Image", "Diameter (cm)", "Size Class", "R", "G", "B", "คลาส"])  # หัวตาราง
 
     # อ่านไฟล์ภาพทั้งหมดในโฟลเดอร์
     image_files = [f for f in os.listdir(image_folder) if f.endswith((".jpg", ".png", ".jpeg"))]
 
-    # เช็คว่ามีภาพหรือไม่
+    # เช็คว่ามีภาพในโฟลเดอร์หรือไม่
     if not image_files:
         print("Error: ไม่พบไฟล์ภาพในโฟลเดอร์")
         exit()
@@ -65,9 +62,8 @@ with open(size_file, mode="w", newline="") as size_csv, open(color_file, mode="w
         image_path = os.path.join(image_folder, image_file)
         original_image = cv2.imread(image_path)
 
-        # ตรวจสอบว่าโหลดภาพสำเร็จหรือไม่
         if original_image is None:
-            print(f"Error: ไม่สามารถโหลดภาพ {image_path}")
+            print(f"Error: ไม่สามารถโหลดภาพ {image_file}")
             continue  # ข้ามภาพนี้แล้วทำภาพถัดไป
 
         # แปลงเป็น Grayscale และทำ Threshold
@@ -98,15 +94,12 @@ with open(size_file, mode="w", newline="") as size_csv, open(color_file, mode="w
 
             # คำนวณค่าเฉลี่ย RGB
             avg_color = np.mean(cropped_image, axis=(0, 1)).astype(int)  # ค่า RGB
-            color_class = get_color_class(avg_color)
+            color_class = get_color_class(avg_color)  # จะได้แค่ค่า 10, 20, 30 เท่านั้น
 
-            # บันทึกข้อมูลขนาดลง CSV
-            size_writer.writerow([image_file, f"{diameter_cm:.2f}", size_class])
+            # บันทึกข้อมูลลง CSV
+            writer.writerow([image_file, f"{diameter_cm:.2f}", size_class, avg_color[2], avg_color[1], avg_color[0], color_class])
 
-            # บันทึกข้อมูลสีลง CSV
-            color_writer.writerow([image_file, avg_color[2], avg_color[1], avg_color[0], color_class])  # OpenCV ใช้ BGR
-
-            print(f"✅ {image_file}: เส้นผ่านศูนย์กลาง ≈ {diameter_cm:.2f} cm, รหัสขนาด {size_class}, สี {avg_color} (คลาส {color_class})")
+            print(f"✅ {image_file}: เส้นผ่านศูนย์กลาง ≈ {diameter_cm:.2f} cm, รหัสขนาด {size_class}, R={avg_color[2]}, G={avg_color[1]}, B={avg_color[0]}, คลาส {color_class}")
 
 print(f"✅ ประมวลผลภาพทั้งหมด ({len(image_files)} ภาพ) เสร็จสิ้น!")
-print(f"📂 ข้อมูลบันทึกลงใน: {size_file} และ {color_file}")
+print(f"📂 ข้อมูลบันทึกลงใน: {output_csv}")
