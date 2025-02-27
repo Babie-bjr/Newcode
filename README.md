@@ -110,12 +110,13 @@ with open(size_csv, mode="w", newline="") as size_file, open(color_csv, mode="w"
             # เพิ่มตัวนับจำนวนของแต่ละสี
             if color_class == 10:
                 red_count += 1
+                print(f"✅ {image_file}: Red Class Added (total Red: {red_count})")
             elif color_class == 20:
                 green_count += 1
+                print(f"✅ {image_file}: Green Class Added (total Green: {green_count})")
             elif color_class == 30:
                 black_count += 1
-
-            print(f"✅ {image_file}: เส้นผ่านศูนย์กลาง ≈ {diameter_cm:.2f} cm, รหัสขนาด {size_class}, R={avg_color[2]}, G={avg_color[1]}, B={avg_color[0]}, คลาส {color_class}")
+                print(f"✅ {image_file}: Black Class Added (total Black: {black_count})")
 
             # หยุดเมื่อครบ 100 รูปของแต่ละสี
             if red_count >= max_per_class and green_count >= max_per_class and black_count >= max_per_class:
@@ -183,6 +184,12 @@ with open(size_csv, mode="w", newline="") as size_file, open(color_csv, mode="w"
                     print(f"✅ {image_file}: Black Class Added (total Black: {black_count})")
 
                 # หยุดเมื่อครบ 100 รูปของแต่ละสี
+                if red_count >= max_per_class and green_count >= max_per_class and black_count >= max_per_class:
+                    break
+
+print(f"✅ ประมวลผลภาพเสร็จสิ้น! (Red: {red_count}, Green: {green_count}, Black: {black_count})")
+print(f"📂 ข้อมูลขนาดบันทึกที่: {size_csv}")
+print(f"📂 ข้อมูลสีบันทึกที่: {color_csv}")
                 if red_count >= max_per_class and green_count >= max_per_class and black_count >= max_per_class:
                     break
 
