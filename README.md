@@ -2,7 +2,6 @@ import cv2
 import numpy as np
 import csv
 import os
-import random
 
 # ฟังก์ชันแปลงพิกเซลเป็นเซนติเมตร
 def pixel_to_cm(pixels, dpi=300):
@@ -27,89 +26,101 @@ def get_size_class(diameter):
 # ฟังก์ชันกำหนดคลาสสี (Red = 10, Green = 20, Black = 30)
 def get_color_class(rgb):
     r, g, b = rgb
-    if r > g and r > b:
-        return 10  # Red
-    elif g > r and g > b:
-        return 20  # Green
-    elif r < 50 and g < 50 and b < 50:
-        return 30  # Black
-    return random.choice([10, 20, 30])  # ถ้าไม่ตรงกับเงื่อนไขใดเลย ให้สุ่มคลาสเพื่อรักษาสมดุล
+    colors = {10: (255, 0, 0), 20: (0, 255, 0), 30: (0, 0, 0)}
+    closest_class = min(colors, key=lambda c: np.linalg.norm(np.array(rgb) - np.array(colors[c])))
+    return closest_class
 
-# ตั้งค่าพาธโฟลเดอร์รูปภาพ
-image_folder = "images"  # เปลี่ยนเป็นพาธที่เก็บรูปภาพของคุณ
-output_dir = "output_data"
-os.makedirs(output_dir, exist_ok=True)
+# กำหนดโฟลเดอร์ที่เก็บรูป
+image_folder = "mangosteen_dataset"
+output_folder = "output_data"
+os.makedirs(output_folder, exist_ok=True)
 
-# เตรียมไฟล์ CSV
-size_file = os.path.join(output_dir, "size_data.csv")
-color_file = os.path.join(output_dir, "color_data.csv")
+# กำหนดไฟล์ CSV แยกข้อมูลขนาดและสี
+size_csv = os.path.join(output_folder, "mangosteen_size.csv")
+color_csv = os.path.join(output_folder, "mangosteen_color.csv")
 
-size_data = [["Image", "Diameter (cm)", "Size Class"]]
-color_data = [["Image", "R", "G", "B", "คลาส"]]
+# กำหนดจำนวนภาพที่ต้องการใช้
+max_per_class = 100
+red_count = 0
+green_count = 0
+black_count = 0
 
-# นับจำนวนของแต่ละคลาส
-color_counts = {10: 0, 20: 0, 30: 0}
+# เปิดไฟล์ CSV 2 ไฟล์
+with open(size_csv, mode="w", newline="") as size_file, open(color_csv, mode="w", newline="") as color_file:
+    size_writer = csv.writer(size_file)
+    color_writer = csv.writer(color_file)
 
-# อ่านและประมวลผลรูปทั้งหมด
-for image_name in os.listdir(image_folder):
-    image_path = os.path.join(image_folder, image_name)
-    original_image = cv2.imread(image_path)
+    # เขียนหัวตาราง
+    size_writer.writerow(["Image", "Diameter (cm)", "Size Class"])
+    color_writer.writerow(["Image", "R", "G", "B", "Class"])
 
-    if original_image is None:
-        print(f"Error: ไม่สามารถโหลดภาพ {image_path}")
-        continue
+    # อ่านไฟล์ภาพทั้งหมดในโฟลเดอร์
+    image_files = [f for f in os.listdir(image_folder) if f.endswith((".jpg", ".png", ".jpeg"))]
 
-    # แปลงเป็น Grayscale และทำ Threshold
-    gray_image = cv2.cvtColor(original_image, cv2.COLOR_BGR2GRAY)
-    _, binary_image = cv2.threshold(gray_image, 128, 255, cv2.THRESH_BINARY_INV)
+    # วนลูปรันทุกภาพ
+    for image_file in image_files:
+        image_path = os.path.join(image_folder, image_file)
+        original_image = cv2.imread(image_path)
 
-    # ทำความสะอาด Noise
-    kernel = np.ones((5, 5), np.uint8)
-    binary_image_cleaned = cv2.morphologyEx(binary_image, cv2.MORPH_CLOSE, kernel)
+        if original_image is None:
+            print(f"Error: ไม่สามารถโหลดภาพ {image_file}")
+            continue
 
-    # หา Contours
-    contours, _ = cv2.findContours(binary_image_cleaned, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        # แปลงเป็น Grayscale และทำ Threshold
+        gray_image = cv2.cvtColor(original_image, cv2.COLOR_BGR2GRAY)
+        _, binary_image = cv2.threshold(gray_image, 128, 255, cv2.THRESH_BINARY_INV)
 
-    if contours:
-        # หา contour ที่ใหญ่ที่สุด
-        largest_contour = max(contours, key=cv2.contourArea)
-        x, y, w, h = cv2.boundingRect(largest_contour)
+        # ทำความสะอาด Noise
+        kernel = np.ones((5, 5), np.uint8)
+        binary_image_cleaned = cv2.morphologyEx(binary_image, cv2.MORPH_CLOSE, kernel)
 
-        # คำนวณเส้นผ่านศูนย์กลาง (เป็น cm)
-        diameter_cm = pixel_to_cm(w)
-        size_class = get_size_class(diameter_cm)
+        # หา Contours
+        contours, _ = cv2.findContours(binary_image_cleaned, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
-        # ครอปบริเวณผลไม้
-        padding = 20
-        x1, y1 = max(x - padding, 0), max(y - padding, 0)
-        x2, y2 = min(x + w + padding, original_image.shape[1]), min(y + h + padding, original_image.shape[0])
-        cropped_image = original_image[y1:y2, x1:x2]
+        if contours:
+            largest_contour = max(contours, key=cv2.contourArea)
+            x, y, w, h = cv2.boundingRect(largest_contour)
 
-        # คำนวณค่าเฉลี่ย RGB
-        avg_color = np.mean(cropped_image, axis=(0, 1)).astype(int)  # ค่า RGB
-        color_class = get_color_class(avg_color)
+            # คำนวณเส้นผ่านศูนย์กลางและขนาด
+            diameter_cm = pixel_to_cm(w)
+            size_class = get_size_class(diameter_cm)
 
-        # ตรวจสอบสมดุลของคลาสสี
-        min_class = min(color_counts, key=color_counts.get)
-        if color_counts[color_class] > color_counts[min_class] + 10:
-            color_class = min_class  # ปรับให้คลาสที่น้อยสุดได้รับเลือก
+            # ครอปบริเวณผลไม้
+            padding = 20
+            x1, y1 = max(x - padding, 0), max(y - padding, 0)
+            x2, y2 = min(x + w + padding, original_image.shape[1]), min(y + h + padding, original_image.shape[0])
+            cropped_image = original_image[y1:y2, x1:x2]
 
-        # บันทึกข้อมูลขนาด
-        size_data.append([image_name, f"{diameter_cm:.2f}", size_class])
+            # คำนวณค่าเฉลี่ย RGB
+            avg_color = np.mean(cropped_image, axis=(0, 1)).astype(int)
+            color_class = get_color_class(avg_color)
 
-        # บันทึกข้อมูลสี
-        color_data.append([image_name, avg_color[2], avg_color[1], avg_color[0], color_class])  # OpenCV ใช้ BGR
+            # ตรวจสอบจำนวนภาพของแต่ละคลาสสี
+            if color_class == 10 and red_count >= max_per_class:
+                continue
+            if color_class == 20 and green_count >= max_per_class:
+                continue
+            if color_class == 30 and black_count >= max_per_class:
+                continue
 
-        # อัปเดตจำนวนของคลาสสี
-        color_counts[color_class] += 1
+            # บันทึกข้อมูลลงไฟล์ CSV
+            size_writer.writerow([image_file, f"{diameter_cm:.2f}", size_class])
+            color_writer.writerow([image_file, avg_color[2], avg_color[1], avg_color[0], color_class])
 
-# บันทึกข้อมูลลงไฟล์ CSV
-with open(size_file, mode="w", newline="") as file:
-    writer = csv.writer(file)
-    writer.writerows(size_data)
+            # เพิ่มตัวนับจำนวนของแต่ละสี
+            if color_class == 10:
+                red_count += 1
+            elif color_class == 20:
+                green_count += 1
+            elif color_class == 30:
+                black_count += 1
 
-with open(color_file, mode="w", newline="") as file:
-    writer = csv.writer(file)
-    writer.writerows(color_data)
+            print(f" {image_file}: Diameter ≈ {diameter_cm:.2f} cm, Size {size_class}, R={avg_color[2]}, G={avg_color[1]}, B={avg_color[0]}, Class {color_class}")
 
-print(f"บันทึกข้อมูลเสร็จสิ้น: {size_file} และ {color_file}")
+            # หยุดเมื่อครบ 100 รูปของแต่ละสี
+            if red_count >= max_per_class and green_count >= max_per_class and black_count >= max_per_class:
+                break
+
+print(f"ประมวลผลภาพเสร็จสิ้น! (Red: {red_count}, Green: {green_count}, Black: {black_count})")
+print(f" ข้อมูลขนาดบันทึกที่: {size_csv}")
+print(f" ข้อมูลสีบันทึกที่: {color_csv}")
