@@ -13,10 +13,26 @@ from sklearn.metrics import accuracy_score, confusion_matrix, classification_rep
 picam2 = Picamera2()
 picam2.configure(picam2.create_still_configuration())
 picam2.start()
-sleep(2)  # รอให้กล้องปรับแสง
+
+# รอให้กล้องปรับแสง
+sleep(2)
+
+# แสดงภาพจากกล้องสด
+while True:
+    frame = picam2.capture_array()  # Capture a frame
+    cv2.imshow("Live Camera Feed", frame)  # แสดงผลภาพสดจากกล้อง
+    
+    # รอการกดปุ่ม 'q' เพื่อหยุด
+    if cv2.waitKey(1) & 0xFF == ord('q'):
+        break
+
+# หยุดกล้องและปิดหน้าต่างการแสดงผล
+picam2.stop()
+cv2.destroyAllWindows()
+
+# ถ่ายภาพและบันทึกเป็นไฟล์
 image_path = "mangosteen.jpg"
 picam2.capture_file(image_path)
-picam2.stop()
 
 # โหลดภาพ
 original_image = cv2.imread(image_path)
