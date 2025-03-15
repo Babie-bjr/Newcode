@@ -1,100 +1,123 @@
-from sklearn.model_selection import train_test_split, cross_val_score
-from sklearn.neighbors import KNeighborsClassifier
-from sklearn.metrics import accuracy_score, confusion_matrix, ConfusionMatrixDisplay, classification_report
-from sklearn.preprocessing import StandardScaler
-import pandas as pd
+import os
+import cv2
 import numpy as np
+import pandas as pd
 import matplotlib.pyplot as plt
-import seaborn as sns
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.preprocessing import MinMaxScaler
+from sklearn.model_selection import train_test_split, cross_val_score
+from sklearn.metrics import accuracy_score
 
-# โหลดข้อมูลจากไฟล์ CSV
-file_path = "/content/drive/MyDrive/Dataset /mangosteen_colors_225.csv"
-data = pd.read_csv(file_path)
+# พาธโฟลเดอร์และไฟล์
+image_folder = "images/"
+output_csv = "data/output.csv"
+dataset_path = "data/mangosteen_colors.csv"
 
-# แปลงค่าหมวดหมู่เป็นตัวเลข
-data['R'] = pd.to_numeric(data['R'], errors='coerce').fillna(0)
-data['G'] = pd.to_numeric(data['G'], errors='coerce').fillna(0)
-data['B'] = pd.to_numeric(data['B'], errors='coerce').fillna(0)
-data['Class'] = data['Class'].replace({'Red': 10, 'Black': 20, 'Green': 30})
+# ฟังก์ชันแปลงพิกเซลเป็นเซนติเมตร
+def pixel_to_cm(pixels, dpi=300):
+    inches = pixels / dpi
+    return inches * 2.54
 
-# แสดงการกระจายของข้อมูล RGB
-def plot_data_distribution(data):
-    sns.pairplot(data, hue='Class', palette='bright')
+# ฟังก์ชันกำหนดคลาสขนาด
+def get_size_class(diameter):
+    if diameter > 6.2:
+        return 1
+    elif 5.9 <= diameter <= 6.2:
+        return 2
+    elif 5.3 <= diameter <= 5.8:
+        return 3
+    elif 4.6 <= diameter <= 5.2:
+        return 4
+    elif 3.8 <= diameter <= 4.5:
+        return 5
+    else:
+        return 0
+
+# ฟังก์ชันจำแนกสีจากค่า RGB
+color_ranges = {
+    'Black': {'R': (15, 40), 'G': (15, 60), 'B': (25, 80)},
+    'Green': {'R': (20, 90), 'G': (45, 195), 'B': (75, 220)},
+    'Red': {'R': (20, 70), 'G': (20, 90), 'B': (25, 110)}
+}
+
+def classify_color(r, g, b):
+    for color, ranges in color_ranges.items():
+        if ranges['R'][0] <= r <= ranges['R'][1] and \
+           ranges['G'][0] <= g <= ranges['G'][1] and \
+           ranges['B'][0] <= b <= ranges['B'][1]:
+            return color
+    return "Unknown"
+
+# ฟังก์ชันเทรนโมเดล KNN
+def train_knn_model(data):
+    x = data[['R', 'G', 'B']]
+    y = data['Class']
+    
+    x_train, x_test, y_train, y_test = train_test_split(x, y, test_size=0.2, random_state=42)
+    
+    scaler = MinMaxScaler()
+    x_train_scaled = scaler.fit_transform(x_train)
+    x_test_scaled = scaler.transform(x_test)
+
+    best_k = max(range(1, 21), key=lambda k: cross_val_score(KNeighborsClassifier(n_neighbors=k), x_train_scaled, y_train, cv=10).mean())
+
+    knn = KNeighborsClassifier(n_neighbors=best_k)
+    knn.fit(x_train_scaled, y_train)
+
+    predictions = knn.predict(x_test_scaled)
+    accuracy = accuracy_score(y_test, predictions)
+    print(f"Test Accuracy: {accuracy * 100:.2f}%")
+
+    return knn, scaler
+
+# โหลดข้อมูลสีจากไฟล์ CSV และเทรนโมเดล
+data = pd.read_csv(dataset_path)
+knn_model, scaler = train_knn_model(data)
+
+# ประมวลผลภาพทั้งหมดในโฟลเดอร์
+results = []
+for image_file in os.listdir(image_folder):
+    image_path = os.path.join(image_folder, image_file)
+    
+    # โหลดภาพ
+    original_image = cv2.imread(image_path)
+    if original_image is None:
+        print(f"Error: ไม่สามารถโหลดภาพ {image_path}")
+        continue
+
+    # แปลงเป็นขาวดำ และหาขอบเขต
+    gray_image = cv2.cvtColor(original_image, cv2.COLOR_BGR2GRAY)
+    _, binary_image = cv2.threshold(gray_image, 128, 255, cv2.THRESH_BINARY_INV)
+    kernel = np.ones((5, 5), np.uint8)
+    binary_image_cleaned = cv2.morphologyEx(binary_image, cv2.MORPH_CLOSE, kernel)
+
+    # หา Contours
+    contours, _ = cv2.findContours(binary_image_cleaned, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if not contours:
+        print(f"Warning: ไม่พบวัตถุในภาพ {image_file}")
+        continue
+
+    largest_contour = max(contours, key=cv2.contourArea)
+    x, y, w, h = cv2.boundingRect(largest_contour)
+    diameter_cm = pixel_to_cm(w)
+    size_class = get_size_class(diameter_cm)
+
+    # อ่านค่า RGB ที่ตำแหน่งตรงกลางของวัตถุ
+    center_x, center_y = x + w // 2, y + h // 2
+    b, g, r = original_image[center_y, center_x]
+    predicted_class = classify_color(r, g, b)
+
+    # เก็บข้อมูล
+    results.append([image_file, diameter_cm, size_class, r, g, b, predicted_class])
+
+    # แสดงผลภาพพร้อมข้อมูล
+    plt.figure(figsize=(5, 5))
+    plt.imshow(cv2.cvtColor(original_image, cv2.COLOR_BGR2RGB))
+    plt.title(f"{image_file} | ขนาด: {diameter_cm:.2f} cm | สี: {predicted_class}")
+    plt.axis("off")
     plt.show()
 
-plot_data_distribution(data)
-
-# แบ่งข้อมูลเป็น Train 80% และ Test + Validation 20% (Test 10% / Validation 10%)
-x = data[['R', 'G', 'B']]
-y = data['Class']
-train_x, temp_x, train_y, temp_y = train_test_split(x, y, train_size=0.75, random_state=42, stratify=y)
-test_x, validation_x, test_y, validation_y = train_test_split(temp_x, temp_y, test_size=0.4, random_state=42, stratify=temp_y)
-
-# Standardize ข้อมูล
-scaler = StandardScaler()
-train_x_scaled = scaler.fit_transform(train_x)
-test_x_scaled = scaler.transform(test_x)
-validation_x_scaled = scaler.transform(validation_x)
-
-# ฟังก์ชันสำหรับ Train KNN Model
-def train_knn(k):
-    knn = KNeighborsClassifier(n_neighbors=k, weights='distance', metric='euclidean')
-    knn.fit(train_x_scaled, train_y)
-    return knn
-
-# ค้นหาค่า K ที่ดีที่สุด (จาก 1 ถึง 20)
-def find_best_k():
-    k_values = range(1, 21)
-    scores = []
-    for k in k_values:
-        knn = train_knn(k)
-        score = cross_val_score(knn, train_x_scaled, train_y, cv=5, scoring='accuracy').mean()
-        scores.append(score)
-
-    best_k = k_values[np.argmax(scores)]
-    print(f'Best K: {best_k}, Accuracy: {max(scores) * 100:.2f}%')
-
-    # พล็อตกราฟ Accuracy vs. K
-    plt.figure(figsize=(8,5))
-    plt.plot(k_values, scores, marker='o', linestyle='dashed', color='b')
-    plt.xlabel('Number of Neighbors (K)')
-    plt.ylabel('Cross Validation Accuracy')
-    plt.title('Accuracy vs. K')
-    plt.show()
-
-    return best_k
-
-# หาค่า K ที่ดีที่สุด
-optimal_k = find_best_k()
-
-# Train โมเดลด้วย K ที่ดีที่สุด
-knn = train_knn(optimal_k)
-
-# ฟังก์ชันสำหรับประเมินโมเดล
-def evaluate_model(knn, x_scaled, y_true, dataset_name="Test"):
-    y_pred = knn.predict(x_scaled)
-    accuracy = accuracy_score(y_true, y_pred)
-    print(f'Accuracy on {dataset_name} Data: {accuracy * 100:.2f}%')
-
-    # แสดง Classification Report
-    print(f"\nClassification Report on {dataset_name} Data:")
-    print(classification_report(y_true, y_pred, target_names=['Red', 'Black', 'Green']))
-
-    # แสดง Confusion Matrix
-    cm = confusion_matrix(y_true, y_pred)
-    disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=['Red', 'Black', 'Green'])
-    disp.plot(cmap=plt.cm.Blues)
-    plt.title(f'Confusion Matrix on {dataset_name} Data\nAccuracy: {accuracy * 100:.2f}%')
-    plt.show()
-
-    return accuracy
-
-# ประเมินผลลัพธ์
-test_accuracy = evaluate_model(knn, test_x_scaled, test_y, dataset_name="Test")
-validation_accuracy = evaluate_model(knn, validation_x_scaled, validation_y, dataset_name="Validation")
-
-# บันทึกผลลัพธ์ลงไฟล์
-results = pd.DataFrame({
-    'Dataset': ['Test', 'Validation'],
-    'Accuracy': [test_accuracy * 100, validation_accuracy * 100]
-})
+# บันทึกข้อมูลลง CSV
+df = pd.DataFrame(results, columns=["Filename", "Diameter (cm)", "Size Class", "R", "G", "B", "Predicted Class"])
+df.to_csv(output_csv, index=False)
+print(f"ผลลัพธ์ถูกบันทึกลงไฟล์ {output_csv}")
