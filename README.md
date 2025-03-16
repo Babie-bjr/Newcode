@@ -1,122 +1,182 @@
-import cv2
 import numpy as np
 import pandas as pd
-import time
-from picamera2 import Picamera2
-from picamera2.utils import Preview
-from sklearn.model_selection import train_test_split
+import matplotlib.pyplot as plt
+import seaborn as sns
+from mpl_toolkits.mplot3d import Axes3D
+from sklearn.model_selection import train_test_split, cross_val_score, StratifiedKFold, GridSearchCV
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.preprocessing import MinMaxScaler
-from sklearn.metrics import accuracy_score, classification_report
+from sklearn.metrics import accuracy_score, confusion_matrix, classification_report, ConfusionMatrixDisplay
+from google.colab import drive
+import warnings
+import cv2
 
-# Function to convert pixels to cm based on dpi
-def pixel_to_cm(pixels, dpi=300):
-    inches = pixels / dpi
-    return inches * 2.54
+warnings.filterwarnings("ignore")
 
-# Function to get size class of mangosteen based on diameter
-def get_size_class(diameter):
-    if diameter > 6.2:
-        return 1
-    elif 5.9 <= diameter <= 6.2:
-        return 2
-    elif 5.3 <= diameter <= 5.8:
-        return 3
-    elif 4.6 <= diameter <= 5.2:
-        return 4
-    elif 3.8 <= diameter <= 4.5:
-        return 5
-    else:
-        return 0
+# Mount Google Drive
+drive.mount('/content/drive')
 
-# Function to process image and predict size class
-def process_image(image):
-    gray_image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    _, binary_image = cv2.threshold(gray_image, 128, 255, cv2.THRESH_BINARY_INV)
-    kernel = np.ones((5, 5), np.uint8)
-    binary_image_cleaned = cv2.morphologyEx(binary_image, cv2.MORPH_CLOSE, kernel)
-    contours1, _ = cv2.findContours(binary_image_cleaned, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+# โหลดข้อมูลจากไฟล์ CSV
+file_path = "/content/drive/MyDrive/Project/(2)New_MangosteenData.csv"
+data = pd.read_csv(file_path)
 
-    if contours1:
-        largest_contour1 = max(contours1, key=cv2.contourArea)
-        x, y, w, h = cv2.boundingRect(largest_contour1)
-        diameter_cm = pixel_to_cm(w)
-        size_class = get_size_class(diameter_cm)
-        return size_class, diameter_cm
-    else:
-        print("No contours found.")
-        return None, None
+# แปลงค่าหมวดหมู่เป็นตัวเลข
+for channel in ['R', 'G', 'B']:
+    data[channel] = pd.to_numeric(data[channel], errors='coerce').fillna(0)
 
-# KNN Model
-def train_knn_model():
-    # Load dataset and preprocess
-    data = pd.read_csv("mangosteen_data.csv")  # Update with the actual path to your CSV
+# **ปรับค่าช่วงสีสำหรับการจัดกลุ่ม**
+color_ranges = {
+    'Black': {'R': (15, 40), 'G': (15, 60), 'B': (25, 80)},  # ปรับช่วงสี Black
+    'Green': {'R': (20, 90), 'G': (45, 195), 'B': (75, 220)},  # ปรับช่วงสี Green
+    'Red': {'R': (20, 70), 'G': (20, 90), 'B': (25, 110)}   # สีแดง
+}
 
-    # Split dataset into features (R, G, B) and target (Class)
-    x = data[['R', 'G', 'B']]
-    y = data['Class']
 
-    # Scale features
-    scaler = MinMaxScaler()
-    x_scaled = scaler.fit_transform(x)
+def classify_color(r, g, b):
+    for color, ranges in color_ranges.items():
+        if ranges['R'][0] <= r <= ranges['R'][1] and ranges['G'][0] <= g <= ranges['G'][1] and ranges['B'][0] <= b <= ranges['B'][1]:
+            return color
+    return "Unknown"
 
-    # Split into train and test
-    train_x, test_x, train_y, test_y = train_test_split(x_scaled, y, test_size=0.2, random_state=42)
+def evaluate_model(model, X, y, dataset_name="Test"):
+    """Evaluates the model and returns accuracy, predictions, true labels, and features."""
+    predictions = model.predict(X)
+    accuracy = accuracy_score(y, predictions)
+    return accuracy, predictions, y, X
 
-    # Train KNN model
-    knn = KNeighborsClassifier(n_neighbors=5)
-    knn.fit(train_x, train_y)
+def print_evaluation_results(y_true, y_pred, dataset_name):
+    """Prints classification report and confusion matrix."""
+    accuracy = accuracy_score(y_true, y_pred)
+    print(f"\nClassification Report on {dataset_name} Data:")
+    print(classification_report(y_true, y_pred, target_names=['Red', 'Black', 'Green'], zero_division=0))
 
-    # Evaluate the model
-    predictions = knn.predict(test_x)
-    accuracy = accuracy_score(test_y, predictions)
-    print(f"KNN Model Accuracy: {accuracy * 100:.2f}%")
-    print(classification_report(test_y, predictions))
+    cm = confusion_matrix(y_true, y_pred, labels=sorted(y.unique()))
+    disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=['Red', 'Black', 'Green'])
+    disp.plot(cmap=plt.cm.Blues)
+    plt.title(f'Confusion Matrix on {dataset_name} Data\nAccuracy: {accuracy * 100:.2f}%')
+    plt.show()
 
-    return knn, scaler
+# คำนวณคลาสของมังคุด
+data['Computed_Class'] = data.apply(lambda row: classify_color(row['R'], row['G'], row['B']), axis=1)
 
-# Function to capture image from camera
-def capture_image(picam2):
-    frame = picam2.capture_array()  # Capture image from the camera
-    return frame
+color_mapping = {'Red': 'Class B', 'Black': 'Class C', 'Green': 'Class A', 'Unknown': 'Class B'}
+data['Class'] = data['Computed_Class'].map(color_mapping)
 
-# Setup the Pi camera
-picam2 = Picamera2()
-picam2.start_preview(Preview.NULL)  # Disable preview window
-time.sleep(2)  # Allow camera to warm up
+# แบ่งข้อมูลสำหรับ Train/Validation/Test โดยใช้ StratifiedKFold
+x = data[['R', 'G', 'B']]
+y = data['Class']
 
-# Train the KNN model
-knn, scaler = train_knn_model()
+# 1. หาค่า K ที่ดีที่สุดโดยใช้ nested cross-validation บนข้อมูลทั้งหมด
+x = data[['R', 'G', 'B']]
+y = data['Class']
 
-# Real-time processing loop
-while True:
-    # Capture image from camera
-    image = capture_image(picam2)
+# Initialize the scaler
+scaler = MinMaxScaler()
 
-    # Process image to detect size and classify
-    size_class, diameter = process_image(image)
+skf = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)  # ใช้ StratifiedKFold
+for train_index, test_index in skf.split(x, y):
+    train_x, test_x = x.iloc[train_index], x.iloc[test_index]
+    train_y, test_y = y.iloc[train_index], y.iloc[test_index]
 
-    if size_class is not None:
-        # Show predicted size class on the image
-        cv2.putText(image, f"Size Class: {size_class}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2, cv2.LINE_AA)
-        cv2.putText(image, f"Diameter: {diameter:.2f} cm", (10, 70), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2, cv2.LINE_AA)
+    # Scale the training data within the loop
+    train_x_scaled = scaler.fit_transform(train_x)  
 
-        # Predict class using KNN
-        color_features = image[0, 0]  # Take the color of the first pixel for simplicity (or you could extract features from more pixels)
-        color_scaled = scaler.transform([color_features])
-        predicted_class = knn.predict(color_scaled)
+    break  # ใช้แค่ fold แรก
 
-        # Display predicted class on the image
-        cv2.putText(image, f"Predicted Class: {predicted_class[0]}", (10, 110), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2, cv2.LINE_AA)
-        
-        # Show the image with results
-        cv2.imshow("Processed Image", image)
+# ค้นหาค่า K ที่เหมาะสม **ปรับปรุงส่วนนี้**
+k_list = list(range(1, 51))  # ทดสอบค่า K ตั้งแต่ 1 ถึง 50
+cv_scores = []
+for k in k_list:
+    knn = KNeighborsClassifier(n_neighbors=k)
+    # Use the scaled training data here
+    scores = cross_val_score(knn, train_x_scaled, train_y, cv=5, scoring='accuracy')  # ใช้ 5-fold cross-validation  
+    cv_scores.append(scores.mean())
 
-    if cv2.waitKey(1) & 0xFF == ord('q'):  # Press 'q' to quit
-        break
+# คำนวณคลาสของมังคุด
+data['Computed_Class'] = data.apply(lambda row: classify_color(row['R'], row['G'], row['B']), axis=1)
 
-# Close all OpenCV windows
-cv2.destroyAllWindows()
+color_mapping = {'Red': 'Class B', 'Black': 'Class C', 'Green': 'Class A', 'Unknown': 'Class B'}  # แมป "Unknown" กับ "Red" (Class B)
+data['Class'] = data['Computed_Class'].map(color_mapping)
 
-# Stop the camera preview
-picam2.stop_preview()
+# แบ่งข้อมูลสำหรับ Train/Validation/Test โดยใช้ StratifiedKFold
+x = data[['R', 'G', 'B']]
+y = data['Class']
+
+# 1. หาค่า K ที่ดีที่สุดโดยใช้ nested cross-validation บนข้อมูลทั้งหมด
+x = data[['R', 'G', 'B']]
+y = data['Class']
+scaler = MinMaxScaler()
+x_scaled = scaler.fit_transform(x)  # ปรับสเกลข้อมูลทั้งหมด
+
+skf = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)  # ใช้ StratifiedKFold
+for train_index, test_index in skf.split(x, y):
+    train_x, test_x = x.iloc[train_index], x.iloc[test_index]
+    train_y, test_y = y.iloc[train_index], y.iloc[test_index]
+    break  # ใช้แค่ fold แรก
+
+# แสดงการกระจายตัวของข้อมูลสีแบบ 3 มิติ
+def plot_3d_color_distribution(data):
+    fig = plt.figure(figsize=(10, 8))
+    ax = fig.add_subplot(111, projection='3d')
+    colors = {'Red': 'r', 'Green': 'g', 'Black': 'k'}
+
+    for color, color_code in colors.items():
+        subset = data[data['Computed_Class'] == color]
+        ax.scatter(subset['R'], subset['G'], subset['B'], c=color_code, label=color, alpha=0.6)
+
+    ax.set_xlabel("Red")
+    ax.set_ylabel("Green")
+    ax.set_zlabel("Blue")
+    ax.set_title("3D Color Distribution of Mangosteen")
+    ax.legend()
+    plt.show()
+
+plot_3d_color_distribution(data)
+
+# **ประมวลผลภาพก่อน KNN**
+
+# Process image (example)
+img_path = '/content/drive/MyDrive/Project/Dataset/235.jpg'  # Replace with actual image path
+img = cv2.imread(img_path)
+
+# Convert to RGB
+img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+
+# Resize for visualization (optional)
+img_resized = cv2.resize(img_rgb, (256, 256))
+
+# Show image
+plt.imshow(img_resized)
+plt.title("Processed Image")
+plt.show()
+
+# Process pixels (example)
+pixels = img_resized.reshape((-1, 3))  # Flatten the image for RGB values
+r, g, b = pixels[0]  # Get RGB values of the first pixel as an example
+
+# Classify the color of the pixel
+color = classify_color(r, g, b)
+print(f"The color of the pixel is classified as: {color}")
+
+# *** KNN Model: Training and Evaluation ***
+# Split data into train, validation, and test sets
+train_x, temp_x, train_y, temp_y = train_test_split(x, y, test_size=0.3, random_state=42)
+validation_x, test_x, validation_y, test_y = train_test_split(temp_x, temp_y, test_size=0.5, random_state=42)
+
+# Scale the data
+scaler = MinMaxScaler()
+train_x_scaled = scaler.fit_transform(train_x)
+validation_x_scaled = scaler.transform(validation_x)
+test_x_scaled = scaler.transform(test_x)
+
+# Train KNN model with the best K
+knn = KNeighborsClassifier(n_neighbors=5)  # Using K=5 as an example
+knn.fit(train_x_scaled, train_y)
+
+# Test the model
+predictions = knn.predict(test_x_scaled)
+accuracy = accuracy_score(test_y, predictions)
+print(f"Test Accuracy: {accuracy * 100:.2f}%")
+
+# Print Evaluation Results
+print_evaluation_results(test_y, predictions, "Test")
